@@ -101,12 +101,18 @@ public class TcpBinaryListener : IBinaryListener
     {
         // [SyncWord(2)][DeviceId(4)][Counter(2)][Type(1)][Length(2)][Payload]
         if (data.Length < 11) throw new DeviceMessageParseException("Message too short");
-        ushort syncWord = BitConverter.ToUInt16(data, 0);
+        
+        // Convert from Big Endian to host endianness
+        ushort syncWord = (ushort)((data[0] << 8) | data[1]);
         if (syncWord != DeviceMessage.SyncWord) throw new DeviceMessageParseException("Invalid sync word");
+        
         var deviceId = data.Skip(2).Take(4).ToArray();
-        var messageCounter = BitConverter.ToUInt16(data, 6);
+        
+        // Convert from Big Endian for multi-byte fields
+        var messageCounter = (ushort)((data[6] << 8) | data[7]);
         var messageType = data[8];
-        var payloadLength = BitConverter.ToUInt16(data, 9);
+        var payloadLength = (ushort)((data[9] << 8) | data[10]);
+        
         if (data.Length < 11 + payloadLength) throw new DeviceMessageParseException("Payload length mismatch");
         var payload = data.Skip(11).Take(payloadLength).ToArray();
         return new DeviceMessage
@@ -148,7 +154,8 @@ public class TcpBinaryListener : IBinaryListener
             if (buffer[i] == 0xAA && buffer[i + 1] == 0x55)
             {
                 if (buffer.Count < i + 11) continue;
-                int payloadLength = BitConverter.ToUInt16(buffer.Skip(i + 9).Take(2).ToArray(), 0);
+                // Extract payload length in Big Endian format
+                int payloadLength = (buffer[i + 9] << 8) | buffer[i + 10];
                 int totalLength = 11 + payloadLength;
                 if (buffer.Count < i + totalLength) continue;
                 messageData = buffer.Skip(i).Take(totalLength).ToArray();

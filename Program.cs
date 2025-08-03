@@ -21,10 +21,14 @@ builder.Configuration.AddJsonFile("appsettings.json", optional: false)
 builder.Services.Configure<TcpListenerOptions>(
     builder.Configuration.GetSection("TcpListener"));
 
-builder.Services.AddSingleton<IMessageHandler, KafkaMessageHandler>();
+builder.Services.AddSingleton<IMessageHandler>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<KafkaMessageHandler>>();
+    return new KafkaMessageHandler(logger);
+});
 builder.Services.AddSingleton<IBinaryListener>(sp =>
 {
-    var options = sp.GetRequiredService<IOptions<TcpListenerOptions>>().Value;
+    var options = sp.GetRequiredService<IOptions<TcpListenerOptions>>().Value; //to get data from config
     var handler = sp.GetRequiredService<IMessageHandler>();
     var logger = sp.GetRequiredService<ILogger<TcpBinaryListener>>();
     return new TcpBinaryListener(options.Port, handler, logger);
