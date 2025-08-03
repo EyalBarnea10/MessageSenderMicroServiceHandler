@@ -70,14 +70,6 @@ namespace MessageSender.Tests
             }
         }
 
-        // Legacy sync wrapper for backward compatibility
-        public static void SendMessage(Uri address, byte[] deviceId, short messageCounter, byte messageType, byte[] payload)
-        {
-            var request = new DeviceMessageRequest(deviceId, (ushort)messageCounter, messageType, payload);
-            SendMessageAsync(address, request).GetAwaiter().GetResult();
-        }
-
-        // Efficient message building using Span<T> and BinaryPrimitives
         private static void BuildMessage(DeviceMessageRequest message, Span<byte> buffer)
         {
             var writer = buffer;
@@ -126,20 +118,6 @@ namespace MessageSender.Tests
             var sendTasks = messages.Select(msg => SendMessageAsync(address, msg, cancellationToken));
             await Task.WhenAll(sendTasks).ConfigureAwait(false);
         }
-
-        // Legacy sync methods for backward compatibility
-        public static void SendStream(string address)
-        {
-            if (!Uri.TryCreate(address, UriKind.Absolute, out var uri))
-            {
-                throw new ArgumentException("Invalid URI format. Use 'tcp://hostname:port' format.", nameof(address));
-            }
-
-            SendStreamAsync(uri).GetAwaiter().GetResult();
-        }
-
-        public static void SendStream(Uri address)
-            => SendStreamAsync(address).GetAwaiter().GetResult();
     }
 
 }

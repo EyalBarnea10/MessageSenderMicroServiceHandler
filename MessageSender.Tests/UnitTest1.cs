@@ -25,11 +25,14 @@ namespace MessageSender.Tests
 
             // Act
             byte[] deviceId = { 0x01, 0x02, 0x03, 0x04 };
-            short messageCounter = 1;
+            ushort messageCounter = 1;
             byte messageType = 0x01;
             byte[] payload = { 0x01, 0x02, 0x03 };
             var address = new Uri($"tcp://localhost:{port}");
-            MessageSender.SendMessage(address, deviceId, messageCounter, messageType, payload);
+            
+            // Use modern API with DeviceMessageRequest
+            var message = new DeviceMessageRequest(deviceId, messageCounter, messageType, payload);
+            await MessageSender.SendMessageAsync(address, message);
             await Task.Delay(500); // Give time for message to be processed
             cts.Cancel();
             await listenerTask;
@@ -38,7 +41,7 @@ namespace MessageSender.Tests
             Assert.True(handlerMock.Received);
             Assert.NotNull(handlerMock.LastMessage);
             Assert.Equal(deviceId, handlerMock.LastMessage.DeviceId);
-            Assert.Equal((ushort)messageCounter, handlerMock.LastMessage.MessageCounter);
+            Assert.Equal(messageCounter, handlerMock.LastMessage.MessageCounter);
             Assert.Equal(messageType, handlerMock.LastMessage.MessageType);
             Assert.Equal(payload, handlerMock.LastMessage.Payload);
         }

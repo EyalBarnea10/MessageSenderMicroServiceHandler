@@ -37,7 +37,8 @@ namespace MessageSender.Helper
         {
             try
             {
-                MessageSender.Tests.MessageSender.SendMessage(address, message.DeviceId.ToArray(), (short)message.MessageCounter, message.MessageType, message.Payload.ToArray());
+                // Use modern async API synchronously
+                MessageSender.Tests.MessageSender.SendMessageAsync(address, message).GetAwaiter().GetResult();
                 return true;
             }
             catch (DeviceMessageException)
