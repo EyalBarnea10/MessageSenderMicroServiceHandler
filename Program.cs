@@ -31,7 +31,7 @@ builder.Services.AddSingleton<IBinaryListener>(sp =>
     var options = sp.GetRequiredService<IOptions<TcpListenerOptions>>().Value; //to get data from config
     var handler = sp.GetRequiredService<IMessageHandler>();
     var logger = sp.GetRequiredService<ILogger<TcpBinaryListener>>();
-    return new TcpBinaryListener(options.Port, handler, logger);
+    return new TcpBinaryListener(options.Port, handler, logger, options);
 });
 builder.Services.AddHostedService<TcpListenerBackgroundService>();
 

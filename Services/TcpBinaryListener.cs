@@ -13,47 +13,98 @@ public class TcpBinaryListener : IBinaryListener
     private readonly int _port;
     private readonly IMessageHandler _handler;
     private readonly ILogger<TcpBinaryListener> _logger;
+    private readonly TcpListenerOptions _options;
     private readonly ConcurrentDictionary<string, HashSet<ushort>> _deduplicationCache = new();
+    private readonly SemaphoreSlim _connectionSemaphore;
 
-    public TcpBinaryListener(int port, IMessageHandler handler, ILogger<TcpBinaryListener> logger)
+    public TcpBinaryListener(int port, IMessageHandler handler, ILogger<TcpBinaryListener> logger, TcpListenerOptions? options = null)
     {
         _port = port;
         _handler = handler;
         _logger = logger;
+        _options = options ?? new TcpListenerOptions();
+        _connectionSemaphore = new SemaphoreSlim(_options.MaxConcurrentClients, _options.MaxConcurrentClients);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var listener = new TcpListener(IPAddress.Any, _port);
         listener.Start();
-        var clients = new ConcurrentBag<Task>();
-        _logger.LogInformation("TCP Listener started on port {Port}", _port);
+        var clientTasks = new List<Task>();
+        _logger.LogInformation("TCP Listener started on port {Port} with max {MaxClients} concurrent connections", 
+            _port, _options.MaxConcurrentClients);
 
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            var client = await listener.AcceptTcpClientAsync(cancellationToken);
-            _logger.LogInformation("Accepted new client from {Endpoint}", client.Client.RemoteEndPoint);
-            clients.Add(HandleClientAsync(client, cancellationToken));
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var client = await listener.AcceptTcpClientAsync(cancellationToken);
+                
+                // Clean up completed tasks to prevent memory leak
+                clientTasks.RemoveAll(t => t.IsCompleted);
+                
+                // Check connection limit
+                if (!await _connectionSemaphore.WaitAsync(0, cancellationToken))
+                {
+                    _logger.LogWarning("Connection limit reached ({MaxClients}), rejecting client {Endpoint}", 
+                        _options.MaxConcurrentClients, client.Client.RemoteEndPoint);
+                    client.Close();
+                    continue;
+                }
+
+                _logger.LogInformation("Accepted new client from {Endpoint} ({ActiveConnections}/{MaxConnections})", 
+                    client.Client.RemoteEndPoint, 
+                    _options.MaxConcurrentClients - _connectionSemaphore.CurrentCount,
+                    _options.MaxConcurrentClients);
+                
+                var clientTask = HandleClientAsync(client, cancellationToken);
+                clientTasks.Add(clientTask);
+            }
         }
-        await Task.WhenAll(clients);
+        finally
+        {
+            listener.Stop();
+            // Wait for all client tasks to complete
+            if (clientTasks.Count > 0)
+            {
+                await Task.WhenAll(clientTasks.Where(t => !t.IsCompleted));
+            }
+            _connectionSemaphore?.Dispose();
+        }
     }
 
     private async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
     {
-        using var stream = client.GetStream();
-        var buffer = new byte[4096];
-        var messageBuffer = new List<byte>();
-        _logger.LogInformation("Handling client {Endpoint}", client.Client.RemoteEndPoint);
         try
         {
+            using var stream = client.GetStream();
+            var buffer = new byte[_options.BufferSize];
+            var messageBuffer = new List<byte>();
+            
+            // Set timeouts from configuration
+            client.ReceiveTimeout = _options.ClientTimeoutMs;
+            client.SendTimeout = _options.ClientTimeoutMs;
+            
+            _logger.LogInformation("Handling client {Endpoint}", client.Client.RemoteEndPoint);
+
             while (!cancellationToken.IsCancellationRequested && client.Connected)
             {
                 int bytesRead = await stream.ReadAsync(buffer, cancellationToken);
                 if (bytesRead == 0) break;
-                messageBuffer.AddRange(buffer.Take(bytesRead));
-                while (TryExtractMessage(ref messageBuffer, out var messageData))
+
+                // Prevent buffer overflow attacks
+                if (messageBuffer.Count + bytesRead > _options.MaxBufferSizePerClient)
                 {
-                    DeviceMessage deviceMessage = null;
+                    _logger.LogWarning("Client {Endpoint} exceeded buffer limit ({MaxSize} bytes), disconnecting", 
+                        client.Client.RemoteEndPoint, _options.MaxBufferSizePerClient);
+                    break;
+                }
+
+                messageBuffer.AddRange(buffer.Take(bytesRead));
+                
+                while (TryExtractMessage(ref messageBuffer, out var messageData) && messageData != null)
+                {
+                    DeviceMessage? deviceMessage = null;
                     try
                     {
                         deviceMessage = ParseDeviceMessage(messageData);
@@ -68,19 +119,26 @@ public class TcpBinaryListener : IBinaryListener
                         _logger.LogError(ex, "Unexpected error during DeviceMessage parsing from client {Endpoint}", client.Client.RemoteEndPoint);
                         continue;
                     }
+                    
                     try
                     {
                         if (IsDuplicate(deviceMessage))
                         {
-                            _logger.LogInformation("Duplicate message detected for DeviceId {DeviceId} Counter {Counter}", BitConverter.ToString(deviceMessage.DeviceId), deviceMessage.MessageCounter);
+                            _logger.LogInformation("Duplicate message detected for DeviceId {DeviceId} Counter {Counter}", 
+                                BitConverter.ToString(deviceMessage.DeviceId), deviceMessage.MessageCounter);
                             continue;
                         }
-                        _logger.LogInformation("Received DeviceMessage from {Endpoint}: DeviceId={DeviceId}, Counter={Counter}, Type={Type}, PayloadLength={PayloadLength}", client.Client.RemoteEndPoint, BitConverter.ToString(deviceMessage.DeviceId), deviceMessage.MessageCounter, deviceMessage.MessageType, deviceMessage.Payload?.Length ?? 0);
+                        
+                        _logger.LogInformation("Received DeviceMessage from {Endpoint}: DeviceId={DeviceId}, Counter={Counter}, Type={Type}, PayloadLength={PayloadLength}", 
+                            client.Client.RemoteEndPoint, BitConverter.ToString(deviceMessage.DeviceId), 
+                            deviceMessage.MessageCounter, deviceMessage.MessageType, deviceMessage.Payload?.Length ?? 0);
+                        
                         await _handler.HandleAsync(deviceMessage, cancellationToken);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Business error: Failed to handle DeviceMessage for DeviceId {DeviceId} Counter {Counter}", BitConverter.ToString(deviceMessage.DeviceId), deviceMessage.MessageCounter);
+                        _logger.LogError(ex, "Business error: Failed to handle DeviceMessage for DeviceId {DeviceId} Counter {Counter}", 
+                            BitConverter.ToString(deviceMessage.DeviceId), deviceMessage.MessageCounter);
                         continue;
                     }
                 }
@@ -94,6 +152,7 @@ public class TcpBinaryListener : IBinaryListener
         {
             _logger.LogInformation("Client {Endpoint} disconnected", client.Client.RemoteEndPoint);
             client.Dispose();
+            _connectionSemaphore.Release(); // Critical: Release the semaphore
         }
     }
 
@@ -135,17 +194,20 @@ public class TcpBinaryListener : IBinaryListener
                 return true;
             }
             counters.Add(message.MessageCounter);
-            // Optionally, limit cache size for each device
-            if (counters.Count > 1000)
+            // Limit cache size for each device to prevent memory growth
+            if (counters.Count > _options.DeduplicationCacheMaxSizePerDevice)
             {
-                var oldest = counters.OrderBy(x => x).Take(counters.Count - 1000).ToList();
+                var excessCount = counters.Count - _options.DeduplicationCacheMaxSizePerDevice;
+                var oldest = counters.OrderBy(x => x).Take(excessCount).ToList();
                 foreach (var old in oldest) counters.Remove(old);
+                _logger.LogDebug("Cleaned up {Count} old message counters for device {DeviceId}", 
+                    oldest.Count, BitConverter.ToString(message.DeviceId));
             }
             return false;
         }
     }
 
-    private bool TryExtractMessage(ref List<byte> buffer, out byte[] messageData)
+    private bool TryExtractMessage(ref List<byte> buffer, out byte[]? messageData)
     {
         messageData = null;
         if (buffer.Count < 11) return false; // Minimum size
