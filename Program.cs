@@ -8,6 +8,7 @@ using OpenTelemetry.Trace;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Prometheus;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,7 +22,13 @@ builder.Services.Configure<TcpListenerOptions>(
     builder.Configuration.GetSection("TcpListener"));
 
 builder.Services.AddSingleton<IMessageHandler, KafkaMessageHandler>();
-builder.Services.AddSingleton<IBinaryListener, TcpBinaryListener>();
+builder.Services.AddSingleton<IBinaryListener>(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<TcpListenerOptions>>().Value;
+    var handler = sp.GetRequiredService<IMessageHandler>();
+    var logger = sp.GetRequiredService<ILogger<TcpBinaryListener>>();
+    return new TcpBinaryListener(options.Port, handler, logger);
+});
 builder.Services.AddHostedService<TcpListenerBackgroundService>();
 
 // Add health checks
