@@ -25,7 +25,6 @@ namespace MessageSender.Tests
 
         public MessageSenderIntegrationTests()
         {
-            // Setup test configuration
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string>
                 {
@@ -40,7 +39,7 @@ namespace MessageSender.Tests
                 })
                 .Build();
 
-            // Create test services
+
             var services = new ServiceCollection();
             services.AddLogging(builder => builder.AddConsole());
             services.AddSingleton<MessageProcessingMetrics>();
@@ -54,7 +53,6 @@ namespace MessageSender.Tests
             var logger = serviceProvider.GetRequiredService<ILogger<TcpBinaryListener>>();
             var metrics = serviceProvider.GetRequiredService<MessageProcessingMetrics>();
             
-            // Create a new test handler for each test instance
             _testHandler = new TestMessageHandler();
 
             _listener = new TcpBinaryListener(options.Port, _testHandler, logger, metrics, options);
@@ -63,7 +61,6 @@ namespace MessageSender.Tests
 
         private void SetupNewListener(int port = 6000)
         {
-            // Create a new listener for each test to avoid interference
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string>
                 {
@@ -83,7 +80,6 @@ namespace MessageSender.Tests
             var logger = serviceProvider.GetRequiredService<ILogger<TcpBinaryListener>>();
             var metrics = serviceProvider.GetRequiredService<MessageProcessingMetrics>();
             
-            // Create a new test handler for each test
             _testHandler = new TestMessageHandler();
             _listener = new TcpBinaryListener(options.Port, _testHandler, logger, metrics, options);
             _cancellationTokenSource = new CancellationTokenSource();
@@ -92,20 +88,18 @@ namespace MessageSender.Tests
         [Fact]
         public async Task MessageSender_Should_Send_Device_Message_Successfully()
         {
-            // Arrange
             SetupNewListener(6001);
             var listenerTask = _listener.StartAsync(_cancellationTokenSource.Token);
-            await Task.Delay(1000); // Give listener time to start
+            await Task.Delay(1000);
 
             byte[] deviceId = { 0x01, 0x02, 0x03, 0x04 };
             ushort messageCounter = 1;
-            byte messageType = 2; // Device Message type
+            byte messageType = 2;
             byte[] payload = { 0x01, 0x02, 0x03 };
             var address = new Uri("tcp://localhost:6001");
 
-            // Act
             MessageSender.SendMessage(address, deviceId, messageCounter, messageType, payload);
-            await Task.Delay(1000); // Give time for message to be processed
+            await Task.Delay(1000);
 
             // Assert
             Assert.True(_testHandler.ReceivedMessages.Count > 0, "No messages were received");
@@ -136,13 +130,12 @@ namespace MessageSender.Tests
 
             byte[] deviceId = { 0x05, 0x06, 0x07, 0x08 };
             ushort messageCounter = 2;
-            byte messageType = 1; // Device Event type
+            byte messageType = 1;
             byte[] payload = { 0x0A, 0x0B };
             var address = new Uri("tcp://localhost:6002");
 
-            // Act
             MessageSender.SendMessage(address, deviceId, messageCounter, messageType, payload);
-            await Task.Delay(1000); // Give time for message to be processed
+            await Task.Delay(1000);
 
             // Assert
             Assert.True(_testHandler.ReceivedMessages.Count > 0, "No messages were received");
@@ -175,12 +168,11 @@ namespace MessageSender.Tests
             byte[] deviceId1 = { 0x01, 0x02, 0x03, 0x04 };
             byte[] deviceId2 = { 0x05, 0x06, 0x07, 0x08 };
 
-            // Act - Send multiple messages
             MessageSender.SendMessage(address, deviceId1, 1, 2, new byte[] { 0x01, 0x02 });
             MessageSender.SendMessage(address, deviceId2, 1, 1, new byte[] { 0x03, 0x04 });
             MessageSender.SendMessage(address, deviceId1, 2, 11, new byte[] { 0x05, 0x06 });
             
-            await Task.Delay(2000); // Give time for messages to be processed
+            await Task.Delay(2000);
 
             // Assert
             Assert.True(_testHandler.ReceivedMessages.Count >= 3, $"Expected at least 3 messages, but received {_testHandler.ReceivedMessages.Count}");
@@ -211,23 +203,23 @@ namespace MessageSender.Tests
             await Task.Delay(2000); // Give listener more time to start
 
             var address = new Uri("tcp://localhost:6004");
-            Console.WriteLine($"🧪 Starting stream test with {_testHandler.ReceivedMessages.Count} initial messages");
 
-            // Act - Send a stream of messages using the SendStream method
+
+
             try
             {
                 MessageSender.SendStream(address);
-                Console.WriteLine("✅ SendStream completed successfully");
+                // SendStream completed successfully
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ SendStream failed: {ex.Message}");
+                throw new Exception($"SendStream failed: {ex.Message}", ex);
                 throw;
             }
 
-            await Task.Delay(5000); // Give more time for all messages to be processed
+            await Task.Delay(5000);
 
-            Console.WriteLine($"📊 Received {_testHandler.ReceivedMessages.Count} messages total");
+            // Assert
 
             // Assert
             Assert.True(_testHandler.ReceivedMessages.Count >= 8, $"Expected at least 8 messages from SendStream, but received {_testHandler.ReceivedMessages.Count}");
@@ -236,7 +228,7 @@ namespace MessageSender.Tests
             var deviceMessages = _testHandler.ReceivedMessages.Where(m => new byte[] { 2, 11, 13 }.Contains(m.MessageType)).ToList();
             var deviceEvents = _testHandler.ReceivedMessages.Where(m => new byte[] { 1, 3, 12, 14 }.Contains(m.MessageType)).ToList();
             
-            Console.WriteLine($"📋 Device Messages: {deviceMessages.Count}, Device Events: {deviceEvents.Count}");
+
             
             Assert.True(deviceMessages.Count >= 3, $"Should have received device messages, but got {deviceMessages.Count}");
             Assert.True(deviceEvents.Count >= 4, $"Should have received device events, but got {deviceEvents.Count}");
@@ -260,15 +252,15 @@ namespace MessageSender.Tests
             var validDeviceId = new byte[] { 0x01, 0x02, 0x03, 0x04 };
             var validPayload = new byte[] { 0x01, 0x02 };
 
-            // Act & Assert - Test null address
+
             Assert.Throws<ArgumentNullException>(() => 
                 MessageSender.SendMessage(null, validDeviceId, 1, 2, validPayload));
 
-            // Act & Assert - Test invalid device ID length
+
             Assert.Throws<ArgumentException>(() => 
                 MessageSender.SendMessage(validAddress, new byte[] { 0x01, 0x02 }, 1, 2, validPayload));
 
-            // Act & Assert - Test null payload
+
             Assert.Throws<ArgumentNullException>(() => 
                 MessageSender.SendMessage(validAddress, validDeviceId, 1, 2, null));
 
@@ -307,8 +299,7 @@ namespace MessageSender.Tests
             }
             catch (Exception ex)
             {
-                // Log but don't throw during disposal
-                Console.WriteLine($"Warning: Error during test disposal: {ex.Message}");
+                // Ignore disposal errors
             }
         }
 
@@ -318,7 +309,6 @@ namespace MessageSender.Tests
 
             public Task HandleAsync(DeviceMessage message, CancellationToken cancellationToken)
             {
-                Console.WriteLine($"📨 Received message: DeviceId={BitConverter.ToString(message.DeviceId)}, Type={message.MessageType}, Counter={message.MessageCounter}");
                 ReceivedMessages.Add(message);
                 return Task.CompletedTask;
             }

@@ -213,14 +213,11 @@ public class TcpBinaryListener : IBinaryListener, IDisposable
                 return true;
             }
             counters.Add(message.MessageCounter);
-            // Limit cache size for each device to prevent memory growth
             if (counters.Count > _options.DeduplicationCacheMaxSizePerDevice)
             {
                 var excessCount = counters.Count - _options.DeduplicationCacheMaxSizePerDevice;
                 var oldest = counters.OrderBy(x => x).Take(excessCount).ToList();
                 foreach (var old in oldest) counters.Remove(old);
-                _logger.LogDebug("Cleaned up {Count} old message counters for device {DeviceId}", 
-                    oldest.Count, BitConverter.ToString(message.DeviceId));
             }
             return false;
         }
@@ -237,7 +234,7 @@ public class TcpBinaryListener : IBinaryListener, IDisposable
         {
             lock (kvp.Value)
             {
-                // Remove devices that haven't been used recently (empty counters)
+
                 if (kvp.Value.Count == 0)
                 {
                     keysToRemove.Add(kvp.Key);
@@ -250,22 +247,18 @@ public class TcpBinaryListener : IBinaryListener, IDisposable
             _deduplicationCache.TryRemove(key, out _);
         }
         
-        if (keysToRemove.Count > 0)
-        {
-            _logger.LogDebug("Cleaned up {Count} inactive device entries from deduplication cache", keysToRemove.Count);
-        }
+
     }
 
     private bool TryExtractMessage(ref List<byte> buffer, out byte[]? messageData)
     {
         messageData = null;
-        if (buffer.Count < 11) return false; // Minimum size
+        if (buffer.Count < 11) return false;
         for (int i = 0; i < buffer.Count - 1; i++)
         {
             if (buffer[i] == 0xAA && buffer[i + 1] == 0x55)
             {
                 if (buffer.Count < i + 11) continue;
-                // Extract payload length in Big Endian format
                 int payloadLength = (buffer[i + 9] << 8) | buffer[i + 10];
                 int totalLength = 11 + payloadLength;
                 if (buffer.Count < i + totalLength) continue;
@@ -275,5 +268,10 @@ public class TcpBinaryListener : IBinaryListener, IDisposable
             }
         }
         return false;
+    }
+
+    public void Dispose()
+    {
+        _connectionSemaphore?.Dispose();
     }
 }

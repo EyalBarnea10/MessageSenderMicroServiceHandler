@@ -78,7 +78,7 @@ app.MapPost("/test-messagesender", async (HttpContext context) =>
     try
     {
         var address = "tcp://localhost:5000";
-        Console.WriteLine($"🧪 Testing MessageSender with real data to {address}...");
+        
         
         // Test individual message sending
         byte[] deviceId = { 0x01, 0x02, 0x03, 0x04 };
