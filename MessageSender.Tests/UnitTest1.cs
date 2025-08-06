@@ -19,9 +19,9 @@ namespace MessageSender.Tests
     public class MessageSenderIntegrationTests : IDisposable
     {
         private readonly IHost _host;
-        private readonly TcpBinaryListener _listener;
-        private readonly TestMessageHandler _testHandler;
-        private readonly CancellationTokenSource _cancellationTokenSource;
+        private TcpBinaryListener _listener;
+        private TestMessageHandler _testHandler;
+        private CancellationTokenSource _cancellationTokenSource;
 
         public MessageSenderIntegrationTests()
         {
@@ -44,8 +44,6 @@ namespace MessageSender.Tests
             var services = new ServiceCollection();
             services.AddLogging(builder => builder.AddConsole());
             services.AddSingleton<MessageProcessingMetrics>();
-            services.AddSingleton<TestMessageHandler>();
-            services.AddSingleton<IMessageHandler>(sp => sp.GetRequiredService<TestMessageHandler>());
             
             services.Configure<TcpListenerOptions>(configuration.GetSection("TcpListener"));
             services.Configure<KafkaOptions>(configuration.GetSection("Kafka"));
@@ -55,8 +53,38 @@ namespace MessageSender.Tests
             var options = serviceProvider.GetRequiredService<IOptions<TcpListenerOptions>>().Value;
             var logger = serviceProvider.GetRequiredService<ILogger<TcpBinaryListener>>();
             var metrics = serviceProvider.GetRequiredService<MessageProcessingMetrics>();
-            _testHandler = serviceProvider.GetRequiredService<TestMessageHandler>();
+            
+            // Create a new test handler for each test instance
+            _testHandler = new TestMessageHandler();
 
+            _listener = new TcpBinaryListener(options.Port, _testHandler, logger, metrics, options);
+            _cancellationTokenSource = new CancellationTokenSource();
+        }
+
+        private void SetupNewListener(int port = 6000)
+        {
+            // Create a new listener for each test to avoid interference
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string>
+                {
+                    ["TcpListener:Port"] = port.ToString(),
+                    ["TcpListener:MaxConnections"] = "10"
+                })
+                .Build();
+
+            var services = new ServiceCollection();
+            services.AddLogging(builder => builder.AddConsole());
+            services.AddSingleton<MessageProcessingMetrics>();
+            services.Configure<TcpListenerOptions>(configuration.GetSection("TcpListener"));
+
+            var serviceProvider = services.BuildServiceProvider();
+            
+            var options = serviceProvider.GetRequiredService<IOptions<TcpListenerOptions>>().Value;
+            var logger = serviceProvider.GetRequiredService<ILogger<TcpBinaryListener>>();
+            var metrics = serviceProvider.GetRequiredService<MessageProcessingMetrics>();
+            
+            // Create a new test handler for each test
+            _testHandler = new TestMessageHandler();
             _listener = new TcpBinaryListener(options.Port, _testHandler, logger, metrics, options);
             _cancellationTokenSource = new CancellationTokenSource();
         }
@@ -65,6 +93,7 @@ namespace MessageSender.Tests
         public async Task MessageSender_Should_Send_Device_Message_Successfully()
         {
             // Arrange
+            SetupNewListener(6001);
             var listenerTask = _listener.StartAsync(_cancellationTokenSource.Token);
             await Task.Delay(1000); // Give listener time to start
 
@@ -72,7 +101,7 @@ namespace MessageSender.Tests
             ushort messageCounter = 1;
             byte messageType = 2; // Device Message type
             byte[] payload = { 0x01, 0x02, 0x03 };
-            var address = new Uri("tcp://localhost:6000");
+            var address = new Uri("tcp://localhost:6001");
 
             // Act
             MessageSender.SendMessage(address, deviceId, messageCounter, messageType, payload);
@@ -87,13 +116,21 @@ namespace MessageSender.Tests
             Assert.Equal(payload, receivedMessage.Payload);
 
             _cancellationTokenSource.Cancel();
-            await listenerTask;
+            try
+            {
+                await listenerTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when cancelling the listener
+            }
         }
 
         [Fact]
         public async Task MessageSender_Should_Send_Device_Event_Successfully()
         {
             // Arrange
+            SetupNewListener(6002);
             var listenerTask = _listener.StartAsync(_cancellationTokenSource.Token);
             await Task.Delay(1000); // Give listener time to start
 
@@ -101,7 +138,7 @@ namespace MessageSender.Tests
             ushort messageCounter = 2;
             byte messageType = 1; // Device Event type
             byte[] payload = { 0x0A, 0x0B };
-            var address = new Uri("tcp://localhost:6000");
+            var address = new Uri("tcp://localhost:6002");
 
             // Act
             MessageSender.SendMessage(address, deviceId, messageCounter, messageType, payload);
@@ -116,17 +153,25 @@ namespace MessageSender.Tests
             Assert.Equal(payload, receivedMessage.Payload);
 
             _cancellationTokenSource.Cancel();
-            await listenerTask;
+            try
+            {
+                await listenerTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when cancelling the listener
+            }
         }
 
         [Fact]
         public async Task MessageSender_Should_Handle_Multiple_Messages()
         {
             // Arrange
+            SetupNewListener(6003);
             var listenerTask = _listener.StartAsync(_cancellationTokenSource.Token);
             await Task.Delay(1000); // Give listener time to start
 
-            var address = new Uri("tcp://localhost:6000");
+            var address = new Uri("tcp://localhost:6003");
             byte[] deviceId1 = { 0x01, 0x02, 0x03, 0x04 };
             byte[] deviceId2 = { 0x05, 0x06, 0x07, 0x08 };
 
@@ -147,21 +192,42 @@ namespace MessageSender.Tests
             Assert.True(device2Messages.Count >= 1, "Device 2 should have received at least 1 message");
 
             _cancellationTokenSource.Cancel();
-            await listenerTask;
+            try
+            {
+                await listenerTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when cancelling the listener
+            }
         }
 
         [Fact]
         public async Task MessageSender_Should_Handle_Stream_Of_Messages()
         {
             // Arrange
+            SetupNewListener(6004);
             var listenerTask = _listener.StartAsync(_cancellationTokenSource.Token);
-            await Task.Delay(1000); // Give listener time to start
+            await Task.Delay(2000); // Give listener more time to start
 
-            var address = new Uri("tcp://localhost:6000");
+            var address = new Uri("tcp://localhost:6004");
+            Console.WriteLine($"🧪 Starting stream test with {_testHandler.ReceivedMessages.Count} initial messages");
 
             // Act - Send a stream of messages using the SendStream method
-            MessageSender.SendStream(address);
-            await Task.Delay(3000); // Give time for all messages to be processed
+            try
+            {
+                MessageSender.SendStream(address);
+                Console.WriteLine("✅ SendStream completed successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ SendStream failed: {ex.Message}");
+                throw;
+            }
+
+            await Task.Delay(5000); // Give more time for all messages to be processed
+
+            Console.WriteLine($"📊 Received {_testHandler.ReceivedMessages.Count} messages total");
 
             // Assert
             Assert.True(_testHandler.ReceivedMessages.Count >= 8, $"Expected at least 8 messages from SendStream, but received {_testHandler.ReceivedMessages.Count}");
@@ -170,11 +236,20 @@ namespace MessageSender.Tests
             var deviceMessages = _testHandler.ReceivedMessages.Where(m => new byte[] { 2, 11, 13 }.Contains(m.MessageType)).ToList();
             var deviceEvents = _testHandler.ReceivedMessages.Where(m => new byte[] { 1, 3, 12, 14 }.Contains(m.MessageType)).ToList();
             
-            Assert.True(deviceMessages.Count >= 3, "Should have received device messages");
-            Assert.True(deviceEvents.Count >= 4, "Should have received device events");
+            Console.WriteLine($"📋 Device Messages: {deviceMessages.Count}, Device Events: {deviceEvents.Count}");
+            
+            Assert.True(deviceMessages.Count >= 3, $"Should have received device messages, but got {deviceMessages.Count}");
+            Assert.True(deviceEvents.Count >= 4, $"Should have received device events, but got {deviceEvents.Count}");
 
             _cancellationTokenSource.Cancel();
-            await listenerTask;
+            try
+            {
+                await listenerTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when cancelling the listener
+            }
         }
 
         [Fact]
@@ -215,6 +290,7 @@ namespace MessageSender.Tests
 
             public Task HandleAsync(DeviceMessage message, CancellationToken cancellationToken)
             {
+                Console.WriteLine($"📨 Received message: DeviceId={BitConverter.ToString(message.DeviceId)}, Type={message.MessageType}, Counter={message.MessageCounter}");
                 ReceivedMessages.Add(message);
                 return Task.CompletedTask;
             }
