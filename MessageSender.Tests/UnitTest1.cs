@@ -279,9 +279,37 @@ namespace MessageSender.Tests
 
         public void Dispose()
         {
-            _cancellationTokenSource?.Cancel();
-            _cancellationTokenSource?.Dispose();
-            _host?.Dispose();
+            try
+            {
+                _cancellationTokenSource?.Cancel();
+                
+                // Give some time for cleanup
+                if (_cancellationTokenSource != null)
+                {
+                    Task.Delay(100).Wait();
+                }
+                
+                _cancellationTokenSource?.Dispose();
+                _host?.Dispose();
+                
+                // Clean up deduplication cache if listener exists
+                if (_listener != null)
+                {
+                    try
+                    {
+                        _listener.CleanupDeduplicationCache();
+                    }
+                    catch
+                    {
+                        // Ignore cleanup errors during disposal
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log but don't throw during disposal
+                Console.WriteLine($"Warning: Error during test disposal: {ex.Message}");
+            }
         }
 
         private class TestMessageHandler : IMessageHandler

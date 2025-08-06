@@ -9,7 +9,7 @@ public class DeviceMessageParseException : Exception
     public DeviceMessageParseException(string message) : base(message) { }
 }
 
-public class TcpBinaryListener : IBinaryListener
+public class TcpBinaryListener : IBinaryListener, IDisposable
 {
     private readonly int _port;
     private readonly IMessageHandler _handler;
@@ -31,7 +31,7 @@ public class TcpBinaryListener : IBinaryListener
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        var listener = new TcpListener(IPAddress.Any, _port);
+        using var listener = new TcpListener(IPAddress.Any, _port);
         listener.Start();
         var clientTasks = new List<Task>();
         _logger.LogInformation("TCP Listener started on port {Port} with max {MaxClients} concurrent connections", 
@@ -68,10 +68,22 @@ public class TcpBinaryListener : IBinaryListener
         finally
         {
             listener.Stop();
-            // Wait for all client tasks to complete
+            // Wait for all client tasks to complete with timeout
             if (clientTasks.Count > 0)
             {
-                await Task.WhenAll(clientTasks.Where(t => !t.IsCompleted));
+                try
+                {
+                    await Task.WhenAll(clientTasks.Where(t => !t.IsCompleted))
+                        .WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                }
+                catch (TimeoutException)
+                {
+                    _logger.LogWarning("Timeout waiting for client tasks to complete during shutdown");
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogInformation("Shutdown cancelled while waiting for client tasks");
+                }
             }
             _connectionSemaphore?.Dispose();
         }
@@ -211,6 +223,36 @@ public class TcpBinaryListener : IBinaryListener
                     oldest.Count, BitConverter.ToString(message.DeviceId));
             }
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Cleans up old device entries from the deduplication cache to prevent memory leaks
+    /// </summary>
+    public void CleanupDeduplicationCache()
+    {
+        var keysToRemove = new List<string>();
+        
+        foreach (var kvp in _deduplicationCache)
+        {
+            lock (kvp.Value)
+            {
+                // Remove devices that haven't been used recently (empty counters)
+                if (kvp.Value.Count == 0)
+                {
+                    keysToRemove.Add(kvp.Key);
+                }
+            }
+        }
+        
+        foreach (var key in keysToRemove)
+        {
+            _deduplicationCache.TryRemove(key, out _);
+        }
+        
+        if (keysToRemove.Count > 0)
+        {
+            _logger.LogDebug("Cleaned up {Count} inactive device entries from deduplication cache", keysToRemove.Count);
         }
     }
 
