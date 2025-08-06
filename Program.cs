@@ -9,6 +9,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Prometheus;
 using Microsoft.Extensions.Options;
+using Configuration;
+using Services;
+using Microsoft.AspNetCore.Http;
+using MessageSender.Tests;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,17 +26,21 @@ builder.Configuration.AddJsonFile("appsettings.json", optional: false)
 builder.Services.Configure<TcpListenerOptions>(
     builder.Configuration.GetSection("TcpListener"));
 
-builder.Services.AddSingleton<IMessageHandler>(sp =>
-{
-    var logger = sp.GetRequiredService<ILogger<KafkaMessageHandler>>();
-    return new KafkaMessageHandler(logger);
-});
+// Configure Kafka options with validation
+builder.Services.Configure<KafkaOptions>(
+    builder.Configuration.GetSection(KafkaOptions.SectionName));
+
+// Add services with proper DI registration
+builder.Services.AddSingleton<MessageProcessingMetrics>();
+        // Register real Kafka message handler
+        builder.Services.AddSingleton<IMessageHandler, KafkaMessageHandler>();
 builder.Services.AddSingleton<IBinaryListener>(sp =>
 {
     var options = sp.GetRequiredService<IOptions<TcpListenerOptions>>().Value; //to get data from config
     var handler = sp.GetRequiredService<IMessageHandler>();
     var logger = sp.GetRequiredService<ILogger<TcpBinaryListener>>();
-    return new TcpBinaryListener(options.Port, handler, logger, options);
+    var metrics = sp.GetRequiredService<MessageProcessingMetrics>();
+    return new TcpBinaryListener(options.Port, handler, logger, metrics, options);
 });
 builder.Services.AddHostedService<TcpListenerBackgroundService>();
 
@@ -53,16 +62,6 @@ builder.Services.AddOpenTelemetry()
                .AddJaegerExporter(); // For Jaeger tracing
     });
 
-
-builder.Services.AddOpenTelemetry()
-        .WithMetrics(metrics =>
-    {
-        metrics.AddMeter("TcpListener.Metrics")
-               .AddPrometheusExporter();
-    });
-
-builder.Services.AddOpenTelemetry();
-
 var app = builder.Build();
 
 // Configure endpoints
@@ -72,6 +71,29 @@ app.MapHealthChecks("/health", new HealthCheckOptions
 });
 
 app.MapMetrics();
+
+// Add test endpoint for MessageSender testing
+app.MapPost("/test-messagesender", async (HttpContext context) =>
+{
+    try
+    {
+        var address = "tcp://localhost:5000";
+        Console.WriteLine($"🧪 Testing MessageSender with real data to {address}...");
+        
+        // Test individual message sending
+        byte[] deviceId = { 0x01, 0x02, 0x03, 0x04 };
+        MessageSender.Tests.MessageSender.SendMessage(new Uri(address), deviceId, 1, 2, new byte[] { 0x01, 0x02, 0x03 });
+        
+        // Test stream sending
+        MessageSender.Tests.MessageSender.SendStream(address);
+        
+        return Results.Ok(new { message = "MessageSender test completed successfully", address });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
 
 await app.RunAsync();
 

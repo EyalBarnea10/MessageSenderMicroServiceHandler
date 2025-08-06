@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using Services;
 
 public class DeviceMessageParseException : Exception
 {
@@ -14,14 +15,16 @@ public class TcpBinaryListener : IBinaryListener
     private readonly IMessageHandler _handler;
     private readonly ILogger<TcpBinaryListener> _logger;
     private readonly TcpListenerOptions _options;
+    private readonly MessageProcessingMetrics _metrics;
     private readonly ConcurrentDictionary<string, HashSet<ushort>> _deduplicationCache = new();
     private readonly SemaphoreSlim _connectionSemaphore;
 
-    public TcpBinaryListener(int port, IMessageHandler handler, ILogger<TcpBinaryListener> logger, TcpListenerOptions? options = null)
+    public TcpBinaryListener(int port, IMessageHandler handler, ILogger<TcpBinaryListener> logger, MessageProcessingMetrics metrics, TcpListenerOptions? options = null)
     {
         _port = port;
         _handler = handler;
         _logger = logger;
+        _metrics = metrics;
         _options = options ?? new TcpListenerOptions();
         _connectionSemaphore = new SemaphoreSlim(_options.MaxConcurrentClients, _options.MaxConcurrentClients);
     }
@@ -52,6 +55,7 @@ public class TcpBinaryListener : IBinaryListener
                     continue;
                 }
 
+                _metrics.IncrementActiveConnections();
                 _logger.LogInformation("Accepted new client from {Endpoint} ({ActiveConnections}/{MaxConnections})", 
                     client.Client.RemoteEndPoint, 
                     _options.MaxConcurrentClients - _connectionSemaphore.CurrentCount,
@@ -112,6 +116,7 @@ public class TcpBinaryListener : IBinaryListener
                     catch (DeviceMessageParseException ex)
                     {
                         _logger.LogError(ex, "Business error: Failed to parse DeviceMessage from client {Endpoint}", client.Client.RemoteEndPoint);
+                        _metrics.IncrementInvalidMessagesRejected(ex.Message);
                         continue;
                     }
                     catch (Exception ex)
@@ -126,6 +131,7 @@ public class TcpBinaryListener : IBinaryListener
                         {
                             _logger.LogInformation("Duplicate message detected for DeviceId {DeviceId} Counter {Counter}", 
                                 BitConverter.ToString(deviceMessage.DeviceId), deviceMessage.MessageCounter);
+                            _metrics.IncrementDuplicateMessagesRejected(BitConverter.ToString(deviceMessage.DeviceId));
                             continue;
                         }
                         
@@ -152,6 +158,7 @@ public class TcpBinaryListener : IBinaryListener
         {
             _logger.LogInformation("Client {Endpoint} disconnected", client.Client.RemoteEndPoint);
             client.Dispose();
+            _metrics.DecrementActiveConnections();
             _connectionSemaphore.Release(); // Critical: Release the semaphore
         }
     }

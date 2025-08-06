@@ -11,54 +11,40 @@ namespace MessageSender.Helper
         /// Attempts to send a device message to the specified URI address
         /// </summary>
         /// <param name="address">The target URI address</param>
-        /// <param name="message">The device message to send</param>
-        /// <param name="cancellationToken">Cancellation token for async operation</param>
-        /// <returns>True if message was sent successfully, false if it failed</returns>
-        public static async Task<bool> TrySendMessageAsync(this Uri address, DeviceMessageRequest message, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                await MessageSender.Tests.MessageSender.SendMessageAsync(address, message, cancellationToken).ConfigureAwait(false);
-                return true;
-            }
-            catch (DeviceMessageException)
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Sends a device message to the specified URI address (sync version)
-        /// </summary>
-        /// <param name="address">The target URI address</param>
-        /// <param name="message">The device message to send</param>
-        /// <returns>True if message was sent successfully, false if it failed</returns>
-        public static bool TrySendMessage(this Uri address, DeviceMessageRequest message)
-        {
-            try
-            {
-                // Use modern async API synchronously
-                MessageSender.Tests.MessageSender.SendMessageAsync(address, message).GetAwaiter().GetResult();
-                return true;
-            }
-            catch (DeviceMessageException)
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Creates a device message request with fluent API
-        /// </summary>
-        /// <param name="address">The target URI address</param>
-        /// <param name="deviceId">4-byte device identifier</param>
+        /// <param name="deviceId">Device identifier (4 bytes)</param>
         /// <param name="messageCounter">Message counter</param>
         /// <param name="messageType">Message type</param>
         /// <param name="payload">Message payload</param>
-        /// <returns>DeviceMessageRequest for further operations</returns>
-        public static DeviceMessageRequest CreateMessage(this Uri address, ReadOnlyMemory<byte> deviceId, ushort messageCounter, byte messageType, ReadOnlyMemory<byte> payload)
+        /// <returns>True if message was sent successfully, false if it failed</returns>
+        public static bool TrySendMessage(this Uri address, byte[] deviceId, ushort messageCounter, byte messageType, byte[] payload)
         {
-            return new DeviceMessageRequest(deviceId, messageCounter, messageType, payload);
+            try
+            {
+                MessageSender.Tests.MessageSender.SendMessage(address, deviceId, messageCounter, messageType, payload);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Sends test stream to the specified URI address
+        /// </summary>
+        /// <param name="address">The target URI address</param>
+        /// <returns>True if stream was sent successfully, false if it failed</returns>
+        public static bool TrySendStream(this Uri address)
+        {
+            try
+            {
+                MessageSender.Tests.MessageSender.SendStream(address);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
